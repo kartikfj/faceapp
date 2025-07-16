@@ -3,7 +3,7 @@ import Webcam from "react-webcam";
 import AWS from "aws-sdk";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
-import { Box, CircularProgress, Alert, Typography, Paper, Fade } from "@mui/material";
+import { Box, CircularProgress, Alert, Typography, Paper, Fade, useTheme, useMediaQuery } from "@mui/material";
 import { styled } from '@mui/material/styles';
 
 // Configure AWS
@@ -20,28 +20,29 @@ const s3 = new AWS.S3({
   maxRetries: 3,
 });
 
-const videoConstraints = {
-  width: { ideal: 640 },
-  height: { ideal: 480 },
-  facingMode: "user",
-};
-
 // Styled components
 const StyledPaper = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(3),
   borderRadius: 16,
   background: 'linear-gradient(145deg, #ffffff, #f0f0f0)',
   boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+  width: '100%',
   maxWidth: 720,
   margin: 'auto',
   overflow: 'hidden',
   transition: 'all 0.3s ease-in-out',
+  [theme.breakpoints.down('sm')]: {
+    padding: theme.spacing(2),
+    borderRadius: 12,
+    boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+  },
 }));
 
 const WebcamContainer = styled(Box)(({ theme }) => ({
   position: 'relative',
-  width: 640,
-  height: 480,
+  width: '100%',
+  height: 0,
+  paddingBottom: '75%', // 4:3 aspect ratio
   margin: 'auto',
   borderRadius: 12,
   overflow: 'hidden',
@@ -50,6 +51,10 @@ const WebcamContainer = styled(Box)(({ theme }) => ({
   transition: 'border-color 0.3s ease',
   '&:hover': {
     borderColor: theme.palette.primary.main,
+  },
+  [theme.breakpoints.down('sm')]: {
+    paddingBottom: '100%', // Square aspect ratio for mobile
+    borderRadius: 8,
   },
 }));
 
@@ -64,9 +69,16 @@ const StatusOverlay = styled(Box)(({ theme }) => ({
   textAlign: 'center',
   borderBottomLeftRadius: 12,
   borderBottomRightRadius: 12,
+  [theme.breakpoints.down('sm')]: {
+    padding: theme.spacing(0.5),
+    fontSize: '0.8rem',
+  },
 }));
 
 const CameraCapture = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const processingRef = useRef(false);
@@ -82,6 +94,12 @@ const CameraCapture = () => {
   const [webcamReady, setWebcamReady] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [blinkDetected, setBlinkDetected] = useState(false);
+
+  const videoConstraints = {
+    width: { ideal: isMobile ? 480 : 640 },
+    height: { ideal: isMobile ? 480 : 480 },
+    facingMode: "user",
+  };
 
   const handleWebcamReady = useCallback(() => {
     setWebcamReady(true);
@@ -101,8 +119,8 @@ const CameraCapture = () => {
       const ctx = canvas.getContext("2d");
       if (!ctx) throw new Error("Canvas context unavailable");
 
-      const maxWidth = 640;
-      const maxHeight = 480;
+      const maxWidth = isMobile ? 480 : 640;
+      const maxHeight = isMobile ? 480 : 480;
       let width = img.width;
       let height = img.height;
 
@@ -135,7 +153,7 @@ const CameraCapture = () => {
       console.error("Image compression error:", err);
       throw new Error(`Image compression failed: ${err.message}`);
     }
-  }, []);
+  }, [isMobile]);
 
   const captureAndUpload = useCallback(async () => {
     if (processingRef.current) {
@@ -197,7 +215,7 @@ const CameraCapture = () => {
       if (response.data.message === "Face matched") {
         const form = document.createElement("form");
         form.method = "POST";
-        form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet";
+        form.action = "https://portal.fjtco.com:8444/fjhr/FaceLoginServlet";
         const input = document.createElement("input");
         input.type = "hidden";
         input.name = "employeeId";
@@ -236,23 +254,19 @@ const CameraCapture = () => {
       return;
     }
 
-    // Ensure video dimensions are valid
     if (video.videoWidth === 0 || video.videoHeight === 0) {
       console.log("Video dimensions not ready, skipping frame analysis");
       frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
       return;
     }
 
-    // Set canvas dimensions to match video
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // Get image data
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imageData.data;
 
-    // Focus on eye region (approximate center of frame, adjust as needed)
     const eyeRegion = {
       x: canvas.width * 0.3,
       y: canvas.height * 0.3,
@@ -260,7 +274,6 @@ const CameraCapture = () => {
       height: canvas.height * 0.2,
     };
 
-    // Calculate difference from previous frame in eye region
     let difference = 0;
     if (frameAnalyzerRef.current.prevFrameData) {
       const prevData = frameAnalyzerRef.current.prevFrameData;
@@ -276,13 +289,11 @@ const CameraCapture = () => {
       difference /= eyeRegion.width * eyeRegion.height;
     }
 
-    // Store current frame data
     frameAnalyzerRef.current.prevFrameData = new Uint8ClampedArray(data);
 
-    // Blink detection logic
     const now = Date.now();
-    const blinkThreshold = 30; // Adjust based on testing
-    const minBlinkInterval = 1000; // 1 second cooldown
+    const blinkThreshold = 30;
+    const minBlinkInterval = 1000;
 
     if (
       difference > blinkThreshold &&
@@ -316,22 +327,30 @@ const CameraCapture = () => {
   }, [webcamReady, analyzeFrame]);
 
   return (
-    <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', bgcolor: '#f5f5f5' }}>
+    <Box sx={{ 
+      minHeight: '100vh', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center',
+      bgcolor: '#f5f5f5',
+      p: isMobile ? 2 : 3,
+    }}>
       <StyledPaper elevation={6}>
         <Typography
-          variant="h4"
+          variant={isMobile ? "h5" : "h4"}
           align="center"
           gutterBottom
           sx={{
             fontWeight: 'bold',
             color: '#1976d2',
-            mb: 3,
+            mb: isMobile ? 2 : 3,
             background: 'linear-gradient(to right, #1976d2, #42a5f5)',
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
+            fontSize: isMobile ? '1.8rem' : '2.125rem',
           }}
         >
-          Face Authentication System
+          Face Authentication
         </Typography>
 
         <WebcamContainer>
@@ -352,7 +371,7 @@ const CameraCapture = () => {
               }}
             >
               <CircularProgress sx={{ color: '#1976d2' }} />
-              <Typography sx={{ mt: 2, color: '#fff' }}>
+              <Typography sx={{ mt: 2, color: '#fff', fontSize: isMobile ? '0.9rem' : '1rem' }}>
                 Initializing webcam...
               </Typography>
             </Box>
@@ -369,9 +388,13 @@ const CameraCapture = () => {
               console.error("Webcam error:", err);
             }}
             style={{
-              width: "100%",
-              height: "100%",
-              transform: 'scaleX(-1)', // Mirror the webcam feed
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              transform: 'scaleX(-1)',
             }}
           />
 
@@ -383,13 +406,13 @@ const CameraCapture = () => {
               left: 0,
               width: "100%",
               height: "100%",
-              display: "none", // Hidden canvas for analysis
+              display: "none",
             }}
           />
 
           <Fade in={webcamReady}>
             <StatusOverlay>
-              <Typography variant="body2">
+              <Typography variant="body2" sx={{ fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
                 {uploading
                   ? "Processing authentication..."
                   : isLive
@@ -405,7 +428,11 @@ const CameraCapture = () => {
             <Fade in={!!error}>
               <Alert
                 severity="error"
-                sx={{ mb: 2, borderRadius: 2 }}
+                sx={{ 
+                  mb: 2, 
+                  borderRadius: 2,
+                  fontSize: isMobile ? '0.8rem' : '0.875rem',
+                }}
                 onClose={() => setError(null)}
               >
                 {error}
@@ -417,7 +444,11 @@ const CameraCapture = () => {
             <Fade in={!!result}>
               <Alert
                 severity={result.message === "Face matched" ? "success" : "warning"}
-                sx={{ mb: 2, borderRadius: 2 }}
+                sx={{ 
+                  mb: 2, 
+                  borderRadius: 2,
+                  fontSize: isMobile ? '0.8rem' : '0.875rem',
+                }}
               >
                 {result.message}
               </Alert>

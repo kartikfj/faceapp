@@ -1,7 +1,7 @@
-import React, { useState } from "react";
-import axios from "axios";
+// import React, { useState } from "react";
+// import axios from "axios";
 import AWS from "aws-sdk";
-import { v4 as uuidv4 } from "uuid";
+// import { v4 as uuidv4 } from "uuid";
 import CameraCapture from "./CameraCapture";
 //import LivenessTest from "./LivenessTest";
 // import { Amplify } from 'aws-amplify';
@@ -18,105 +18,105 @@ AWS.config.update({
 
 const s3 = new AWS.S3();
 const App = () => {
-  const [file, setFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+//   const [file, setFile] = useState(null);
+//   const [uploading, setUploading] = useState(false);
+//   const [result, setResult] = useState(null);
+//   const [error, setError] = useState(null);
 
-  const handleFileChange = (event) => {
-    const selectedFile = event.target.files[0];
-    if (selectedFile && ["image/jpeg", "image/png", "image/jpg"].includes(selectedFile.type)) {
-      setFile(selectedFile);
-      setError(null);
-      console.log(`[INFO] Selected file: ${selectedFile.name}`);
-    } else {
-      setFile(null);
-      setError("Please select a valid image file (JPEG, JPG, or PNG)");
-      console.error("[ERROR] Invalid file type selected");
-    }
-  };
+//   const handleFileChange = (event) => {
+//     const selectedFile = event.target.files[0];
+//     if (selectedFile && ["image/jpeg", "image/png", "image/jpg"].includes(selectedFile.type)) {
+//       setFile(selectedFile);
+//       setError(null);
+//       console.log(`[INFO] Selected file: ${selectedFile.name}`);
+//     } else {
+//       setFile(null);
+//       setError("Please select a valid image file (JPEG, JPG, or PNG)");
+//       console.error("[ERROR] Invalid file type selected");
+//     }
+//   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setError("No file selected");
-      console.error("[ERROR] No file selected for upload");
-      return;
-    }
+//   const handleUpload = async () => {
+//     if (!file) {
+//       setError("No file selected");
+//       console.error("[ERROR] No file selected for upload");
+//       return;
+//     }
 
-    setUploading(true);
-    setError(null);
-    setResult(null);
+//     setUploading(true);
+//     setError(null);
+//     setResult(null);
 
-    try {
-      // Generate unique file name
-      const fileName = `search/${uuidv4()}-${file.name}`;
-      console.log(`[INFO] Uploading image: ${fileName} to S3`);
+//     try {
+//       // Generate unique file name
+//       const fileName = `search/${uuidv4()}-${file.name}`;
+//       console.log(`[INFO] Uploading image: ${fileName} to S3`);
 
-      // Upload to S3
-      await s3
-        .upload({
-          Bucket: "fjgroup-employee-authentication",
-          Key: fileName,
-          Body: file,
-          ContentType: file.type,
-        })
-        .promise();
+//       // Upload to S3
+//       await s3
+//         .upload({
+//           Bucket: "fjgroup-employee-authentication",
+//           Key: fileName,
+//           Body: file,
+//           ContentType: file.type,
+//         })
+//         .promise();
 
-      console.log(`[SUCCESS] Image uploaded: ${fileName}`);
+//       console.log(`[SUCCESS] Image uploaded: ${fileName}`);
 
-      // Call API Gateway to trigger face matching
-      const apiUrl = "https://ylj9f75xi9.execute-api.us-east-2.amazonaws.com/dev/authenticate";
-      console.log(`[INFO] Sending request to API Gateway for image: ${fileName}`);
-      const response = await axios.post(apiUrl, {
-        bucket: "fjgroup-employee-authentication",
-        key: fileName,
-      });
+//       // Call API Gateway to trigger face matching
+//       const apiUrl = "https://ylj9f75xi9.execute-api.us-east-2.amazonaws.com/dev/authenticate";
+//       console.log(`[INFO] Sending request to API Gateway for image: ${fileName}`);
+//       const response = await axios.post(apiUrl, {
+//         bucket: "fjgroup-employee-authentication",
+//         key: fileName,
+//       });
 
-      console.log("[SUCCESS] API Gateway response:", response.data);
-      console.log("hi");
-      if (response.data.message === "Face matched") {
-//   const formData = new URLSearchParams();
-// formData.append("employeeId", response.data.employeeId);
+//       console.log("[SUCCESS] API Gateway response:", response.data);
+//       console.log("hi");
+//       if (response.data.message === "Face matched") {
+// //   const formData = new URLSearchParams();
+// // formData.append("employeeId", response.data.employeeId);
 
-// await axios.post("http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet", formData, {
-//   withCredentials: true,
-//   headers: {
-//     "Content-Type": "application/x-www-form-urlencoded"
-//   }
-// });
+// // await axios.post("http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet", formData, {
+// //   withCredentials: true,
+// //   headers: {
+// //     "Content-Type": "application/x-www-form-urlencoded"
+// //   }
+// // });
 
- const form = document.createElement("form");
-  form.method = "POST";
-  form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet"; // or production URL
+//  const form = document.createElement("form");
+//   form.method = "POST";
+//   form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet"; // or production URL
 
-  const input = document.createElement("input");
-  input.type = "hidden";
-  input.name = "employeeId";
-  input.value = response.data.employeeId;
+//   const input = document.createElement("input");
+//   input.type = "hidden";
+//   input.name = "employeeId";
+//   input.value = response.data.employeeId;
 
-  form.appendChild(input);
-  document.body.appendChild(form);
-  form.submit(); // Browser submits the form (no CORS issue)
-  // Redirect to JSP home
-// window.location.href = "http://10.10.4.132:8080/FJPORTAL_DEV/homepage.jsp";
- //window.location.href = "https://portal.fjtco.com:8444/fjhr/homepage.jsp";
+//   form.appendChild(input);
+//   document.body.appendChild(form);
+//   form.submit(); // Browser submits the form (no CORS issue)
+//   // Redirect to JSP home
+// // window.location.href = "http://10.10.4.132:8080/FJPORTAL_DEV/homepage.jsp";
+//  //window.location.href = "https://portal.fjtco.com:8444/fjhr/homepage.jsp";
 
-}
+// }
 
-      setResult(response.data);
-    } catch (err) {
-      console.error("[ERROR] Upload or processing failed:", err);
-      setError(`Failed to process image: ${err.message}`);
-    } finally {
-      setUploading(false);
-    }
-  };
+//       setResult(response.data);
+//     } catch (err) {
+//       console.error("[ERROR] Upload or processing failed:", err);
+//       setError(`Failed to process image: ${err.message}`);
+//     } finally {
+//       setUploading(false);
+//     }
+//   };
 
   return (
     <>
      {/* <LivenessTest />  */}
       <CameraCapture /> 
-    <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-lg shadow-lg">
+    {/* <div className="max-w-md mx-auto mt-10 p-6 bg-white rounded-lg shadow-lg">
       <h2 className="text-2xl font-bold mb-4 text-center">Employee Face Authentication</h2>
       <div className="flex flex-col items-center space-y-4">
         <input
@@ -151,7 +151,7 @@ const App = () => {
           )}
         </div>
       )}
-    </div>
+    </div> */}
  </> );
 };
 

@@ -217,7 +217,12 @@ const CameraCapture = () => {
   }, [compressImage]);
 
   const analyzeFrame = useCallback(() => {
-    if (!webcamRef.current?.video || !canvasRef.current || processingRef.current) {
+    if (
+      !webcamRef.current?.video ||
+      !canvasRef.current ||
+      processingRef.current ||
+      !webcamReady
+    ) {
       frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
       return;
     }
@@ -227,6 +232,13 @@ const CameraCapture = () => {
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       console.error("Canvas context unavailable");
+      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
+      return;
+    }
+
+    // Ensure video dimensions are valid
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.log("Video dimensions not ready, skipping frame analysis");
       frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
       return;
     }
@@ -284,7 +296,7 @@ const CameraCapture = () => {
     }
 
     frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-  }, [captureAndUpload]);
+  }, [captureAndUpload, webcamReady]);
 
   useEffect(() => {
     if (webcamReady) {

@@ -197,7 +197,8 @@ const CameraCapture = () => {
       if (response.data.message === "Face matched") {
         const form = document.createElement("form");
         form.method = "POST";
-        form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet";
+        form.action="https://portal.fjtco.com:8444/fjhr/FaceLoginServlet";
+      //  form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet";
         const input = document.createElement("input");
         input.type = "hidden";
         input.name = "employeeId";

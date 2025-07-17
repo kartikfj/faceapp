@@ -3,6 +3,7 @@ import Webcam from "react-webcam";
 import AWS from "aws-sdk";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
+import * as faceapi from "face-api.js";
 import { Box, CircularProgress, Alert, Typography, Paper, Fade, useTheme, useMediaQuery } from "@mui/material";
 import { styled } from '@mui/material/styles';
 
@@ -19,7 +20,6 @@ const s3 = new AWS.S3({
   },
   maxRetries: 3,
 });
-
 // Styled components
 const StyledPaper = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(3),
@@ -46,7 +46,7 @@ const WebcamContainer = styled(Box)(({ theme }) => ({
   margin: 'auto',
   borderRadius: 12,
   overflow: 'hidden',
-  border: '2px solid #e0e0e0',
+  border: '2px solid #e0e0e074',
   background: '#000',
   transition: 'border-color 0.3s ease',
   '&:hover': {
@@ -86,6 +86,9 @@ const CameraCapture = () => {
     prevFrameData: null,
     lastBlinkTime: 0,
     animationFrame: null,
+    faceDetected: false,
+    faceDetectionCount: 0,
+    modelsLoaded: false,
   });
 
   const [uploading, setUploading] = useState(false);
@@ -94,6 +97,8 @@ const CameraCapture = () => {
   const [webcamReady, setWebcamReady] = useState(false);
   const [isLive, setIsLive] = useState(false);
   const [blinkDetected, setBlinkDetected] = useState(false);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const [modelsLoading, setModelsLoading] = useState(true);
 
   const videoConstraints = {
     width: { ideal: isMobile ? 480 : 640 },
@@ -101,10 +106,32 @@ const CameraCapture = () => {
     facingMode: "user",
   };
 
+  // Load face-api.js models
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const MODEL_URL = process.env.PUBLIC_URL + '/models';
+        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+        frameAnalyzerRef.current.modelsLoaded = true;
+        setModelsLoading(false);
+        console.log("Face detection models loaded successfully");
+      } catch (err) {
+        console.error("Failed to load face detection models:", err);
+        setError("Failed to initialize face detection. Please refresh the page.");
+        setModelsLoading(false);
+      }
+    };
+
+    loadModels();
+  }, []);
+
   const handleWebcamReady = useCallback(() => {
     setWebcamReady(true);
     console.log("Webcam initialized successfully");
   }, []);
+
 
   const compressImage = useCallback(async (imageSrc) => {
     try {
@@ -215,7 +242,7 @@ const CameraCapture = () => {
       if (response.data.message === "Face matched") {
         const form = document.createElement("form");
         form.method = "POST";
-        form.action = "https://portal.fjtco.com:8444/fjhr/FaceLoginServlet";
+        form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet";
         const input = document.createElement("input");
         input.type = "hidden";
         input.name = "employeeId";
@@ -234,12 +261,59 @@ const CameraCapture = () => {
     }
   }, [compressImage]);
 
-  const analyzeFrame = useCallback(() => {
+  const detectFace = async (video) => {
+    if (!frameAnalyzerRef.current.modelsLoaded) return false;
+    
+    try {
+      const detections = await faceapi.detectAllFaces(
+        video,
+        new faceapi.TinyFaceDetectorOptions()
+      ).withFaceLandmarks();
+      
+      // Only proceed if exactly one face is detected
+      if (detections.length === 1) {
+        const landmarks = detections[0].landmarks;
+        
+        // Check if eyes are open (basic liveness check)
+        const leftEye = landmarks.getLeftEye();
+        const rightEye = landmarks.getRightEye();
+        const eyeOpenness = getEyeOpenness(leftEye, rightEye);
+        
+        // Basic threshold for eye openness
+        if (eyeOpenness > 0.2) {
+          frameAnalyzerRef.current.faceDetectionCount++;
+          
+          // Require face to be detected in multiple consecutive frames
+          if (frameAnalyzerRef.current.faceDetectionCount > 5) {
+            return true;
+          }
+        } else {
+          frameAnalyzerRef.current.faceDetectionCount = 0;
+        }
+      } else {
+        frameAnalyzerRef.current.faceDetectionCount = 0;
+      }
+    } catch (err) {
+      console.error("Face detection error:", err);
+    }
+    
+    return false;
+  };
+
+  const getEyeOpenness = (leftEye, rightEye) => {
+    // Calculate eye openness based on landmarks
+    const leftEyeHeight = Math.abs(leftEye[1].y - leftEye[5].y);
+    const rightEyeHeight = Math.abs(rightEye[1].y - rightEye[5].y);
+    return (leftEyeHeight + rightEyeHeight) / 2;
+  };
+
+  const analyzeFrame = useCallback(async () => {
     if (
       !webcamRef.current?.video ||
       !canvasRef.current ||
       processingRef.current ||
-      !webcamReady
+      !webcamReady ||
+      !frameAnalyzerRef.current.modelsLoaded
     ) {
       frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
       return;
@@ -264,6 +338,16 @@ const CameraCapture = () => {
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
+    // First check for face presence
+    const faceDetected = await detectFace(video);
+    setFaceDetected(faceDetected);
+    
+    if (!faceDetected) {
+      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
+      return;
+    }
+
+    // Then proceed with blink detection
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imageData.data;
 
@@ -310,11 +394,14 @@ const CameraCapture = () => {
   }, [captureAndUpload, webcamReady]);
 
   useEffect(() => {
-    if (webcamReady) {
+    if (webcamReady && !modelsLoading) {
       frameAnalyzerRef.current = {
         prevFrameData: null,
         lastBlinkTime: 0,
         animationFrame: null,
+        faceDetected: false,
+        faceDetectionCount: 0,
+        modelsLoaded: true,
       };
       frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
     }
@@ -324,7 +411,7 @@ const CameraCapture = () => {
         cancelAnimationFrame(frameAnalyzerRef.current.animationFrame);
       }
     };
-  }, [webcamReady, analyzeFrame]);
+  }, [webcamReady, analyzeFrame, modelsLoading]);
 
   return (
     <Box sx={{ 
@@ -353,8 +440,17 @@ const CameraCapture = () => {
           Face Authentication
         </Typography>
 
+        {modelsLoading && (
+          <Box sx={{ textAlign: 'center', mb: 3 }}>
+            <CircularProgress sx={{ color: '#1976d2' }} />
+            <Typography sx={{ mt: 2, color: theme.palette.text.secondary }}>
+              Loading face detection models...
+            </Typography>
+          </Box>
+        )}
+
         <WebcamContainer>
-          <Fade in={!webcamReady}>
+          <Fade in={!webcamReady || modelsLoading}>
             <Box
               sx={{
                 position: "absolute",
@@ -372,7 +468,7 @@ const CameraCapture = () => {
             >
               <CircularProgress sx={{ color: '#1976d2' }} />
               <Typography sx={{ mt: 2, color: '#fff', fontSize: isMobile ? '0.9rem' : '1rem' }}>
-                Initializing webcam...
+                {modelsLoading ? "Loading models..." : "Initializing webcam..."}
               </Typography>
             </Box>
           </Fade>
@@ -410,14 +506,16 @@ const CameraCapture = () => {
             }}
           />
 
-          <Fade in={webcamReady}>
+          <Fade in={webcamReady && !modelsLoading}>
             <StatusOverlay>
               <Typography variant="body2" sx={{ fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
                 {uploading
                   ? "Processing authentication..."
                   : isLive
                     ? "Blink detected! Authenticating..."
-                    : "Please blink to authenticate"}
+                    : faceDetected
+                      ? "Please blink to authenticate"
+                      : "Please position your face in the frame"}
               </Typography>
             </StatusOverlay>
           </Fade>

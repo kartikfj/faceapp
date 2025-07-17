@@ -26,6 +26,7 @@
     "canvas": "^2.11.2",
     "copy-webpack-plugin": "^13.0.0",
     "dotenv": "^17.0.0",
+    "face-api.js": "^0.22.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-scripts": "5.0.1",

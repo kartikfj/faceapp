@@ -3,7 +3,6 @@ import Webcam from "react-webcam";
 import AWS from "aws-sdk";
 import axios from "axios";
 import { v4 as uuidv4 } from "uuid";
-import * as faceapi from "face-api.js";
 import { Box, CircularProgress, Alert, Typography, Paper, Fade, useTheme, useMediaQuery } from "@mui/material";
 import { styled } from '@mui/material/styles';
 
@@ -20,6 +19,7 @@ const s3 = new AWS.S3({
   },
   maxRetries: 3,
 });
+
 // Styled components
 const StyledPaper = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(3),
@@ -46,7 +46,7 @@ const WebcamContainer = styled(Box)(({ theme }) => ({
   margin: 'auto',
   borderRadius: 12,
   overflow: 'hidden',
-  border: '2px solid #e0e0e074',
+  border: '2px solid #e0e0e0',
   background: '#000',
   transition: 'border-color 0.3s ease',
   '&:hover': {
@@ -78,17 +78,19 @@ const StatusOverlay = styled(Box)(({ theme }) => ({
 const CameraCapture = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  
+  const isIPhone = /iPhone/i.test(navigator.userAgent);
+
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
+  const faceMeshRef = useRef(null);
+  const cameraRef = useRef(null);
   const processingRef = useRef(false);
-  const frameAnalyzerRef = useRef({
-    prevFrameData: null,
+  const detectionStateRef = useRef({
+    blinkCount: 0,
     lastBlinkTime: 0,
-    animationFrame: null,
     faceDetected: false,
-    faceDetectionCount: 0,
-    modelsLoaded: false,
+    consecutiveFrames: 0,
+    earHistory: [],
   });
 
   const [uploading, setUploading] = useState(false);
@@ -96,9 +98,7 @@ const CameraCapture = () => {
   const [error, setError] = useState(null);
   const [webcamReady, setWebcamReady] = useState(false);
   const [isLive, setIsLive] = useState(false);
-  const [blinkDetected, setBlinkDetected] = useState(false);
-  const [faceDetected, setFaceDetected] = useState(false);
-  const [modelsLoading, setModelsLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(!isIPhone);
 
   const videoConstraints = {
     width: { ideal: isMobile ? 480 : 640 },
@@ -106,32 +106,196 @@ const CameraCapture = () => {
     facingMode: "user",
   };
 
-  // Load face-api.js models
+  // Load MediaPipe scripts dynamically for non-iPhone users
   useEffect(() => {
-    const loadModels = async () => {
+    if (isIPhone) {
+      setModelsLoading(false); // No MediaPipe for iPhone
+      return;
+    }
+
+    const loadMediaPipeScripts = async () => {
       try {
-        const MODEL_URL = process.env.PUBLIC_URL + '/models';
-        await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-        await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-        frameAnalyzerRef.current.modelsLoaded = true;
+        // Load MediaPipe scripts
+        const scripts = [
+          'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js',
+          'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js',
+          'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils@0.3/drawing_utils.js',
+        ];
+
+        for (const src of scripts) {
+          const script = document.createElement('script');
+          script.src = src;
+          script.async = true;
+          document.head.appendChild(script);
+          await new Promise((resolve, reject) => {
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
+          });
+        }
+
+        // Initialize FaceMesh
+        if (!window.FaceMesh) {
+          throw new Error("FaceMesh is not available. Ensure MediaPipe scripts are loaded.");
+        }
+
+        const faceMesh = new window.FaceMesh({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/${file}`;
+          },
+        });
+
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: true,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+
+        faceMesh.onResults(handleFaceMeshResults);
+        faceMeshRef.current = faceMesh;
         setModelsLoading(false);
-        console.log("Face detection models loaded successfully");
       } catch (err) {
-        console.error("Failed to load face detection models:", err);
+        console.error("Failed to initialize face mesh:", err);
         setError("Failed to initialize face detection. Please refresh the page.");
         setModelsLoading(false);
       }
     };
 
-    loadModels();
-  }, []);
+    loadMediaPipeScripts();
+
+    return () => {
+      if (cameraRef.current) {
+        cameraRef.current.stop();
+      }
+      if (faceMeshRef.current) {
+        faceMeshRef.current.close();
+      }
+    };
+  }, [isIPhone]);
 
   const handleWebcamReady = useCallback(() => {
-    setWebcamReady(true);
-    console.log("Webcam initialized successfully");
-  }, []);
+    if (webcamRef.current && webcamRef.current.video && !cameraRef.current) {
+      const video = webcamRef.current.video;
 
+      if (!isIPhone) {
+        try {
+          if (!window.Camera) {
+            throw new Error("Camera is not available. Ensure MediaPipe camera_utils is loaded.");
+          }
+          // Start MediaPipe camera processing for non-iPhone users
+          cameraRef.current = new window.Camera(video, {
+            onFrame: async () => {
+              if (faceMeshRef.current) {
+                await faceMeshRef.current.send({ image: video });
+              }
+            },
+            width: videoConstraints.width.ideal,
+            height: videoConstraints.height.ideal,
+          });
+          cameraRef.current.start();
+        } catch (err) {
+          console.error("Failed to initialize camera:", err);
+          setError("Failed to initialize camera processing. Please refresh the page.");
+          return;
+        }
+      } else {
+        // For iPhone, capture immediately after webcam is ready
+        setTimeout(() => {
+          if (!processingRef.current) {
+            captureAndUpload();
+          }
+        }, 500); // Small delay to ensure webcam is fully initialized
+      }
+
+      setWebcamReady(true);
+      console.log("Webcam initialized successfully");
+    }
+  }, [videoConstraints, isIPhone]);
+
+  // Calculate Eye Aspect Ratio (EAR) for blink detection
+  const calculateEAR = (eyeLandmarks) => {
+    const A = Math.hypot(
+      eyeLandmarks[1].x - eyeLandmarks[5].x,
+      eyeLandmarks[1].y - eyeLandmarks[5].y
+    );
+    const B = Math.hypot(
+      eyeLandmarks[2].x - eyeLandmarks[4].x,
+      eyeLandmarks[2].y - eyeLandmarks[4].y
+    );
+    const C = Math.hypot(
+      eyeLandmarks[0].x - eyeLandmarks[3].x,
+      eyeLandmarks[0].y - eyeLandmarks[3].y
+    );
+    return (A + B) / (2 * C);
+  };
+
+  // Handle face mesh results for non-iPhone users
+  const handleFaceMeshResults = useCallback((results) => {
+    if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+      detectionStateRef.current.faceDetected = false;
+      detectionStateRef.current.consecutiveFrames = 0;
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas || !webcamRef.current?.video) return;
+
+    const video = webcamRef.current.video;
+    const ctx = canvas.getContext('2d');
+
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+
+    ctx.save();
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (const landmarks of results.multiFaceLandmarks) {
+      window.drawConnectors(ctx, landmarks, window.FACEMESH_TESSELATION, 
+        { color: '#C0C0C070', lineWidth: 1 });
+    }
+    ctx.restore();
+
+    const landmarks = results.multiFaceLandmarks[0];
+    const LEFT_EYE = [33, 246, 161, 160, 159, 158, 157, 173];
+    const RIGHT_EYE = [463, 414, 286, 258, 257, 259, 260, 467];
+
+    const leftEye = LEFT_EYE.map(index => landmarks[index]);
+    const rightEye = RIGHT_EYE.map(index => landmarks[index]);
+
+    const leftEAR = calculateEAR(leftEye);
+    const rightEAR = calculateEAR(rightEye);
+    const avgEAR = (leftEAR + rightEAR) / 2;
+
+    detectionStateRef.current.earHistory.push(avgEAR);
+    if (detectionStateRef.current.earHistory.length > 10) {
+      detectionStateRef.current.earHistory.shift();
+    }
+
+    const earAvg = detectionStateRef.current.earHistory.reduce((a, b) => a + b, 0) / 
+                   detectionStateRef.current.earHistory.length;
+
+    const now = Date.now();
+    const EAR_THRESHOLD = 0.25;
+    const EAR_DIFF_THRESHOLD = 0.1;
+    const MIN_BLINK_INTERVAL = 1000;
+
+    if (avgEAR < EAR_THRESHOLD && earAvg - avgEAR > EAR_DIFF_THRESHOLD) {
+      if (now - detectionStateRef.current.lastBlinkTime > MIN_BLINK_INTERVAL) {
+        detectionStateRef.current.blinkCount++;
+        detectionStateRef.current.lastBlinkTime = now;
+        setIsLive(true);
+
+        if (detectionStateRef.current.blinkCount >= 1 && !processingRef.current) {
+          captureAndUpload();
+        }
+      }
+    }
+
+    detectionStateRef.current.consecutiveFrames++;
+    detectionStateRef.current.faceDetected = detectionStateRef.current.consecutiveFrames > 5;
+  }, []);
 
   const compressImage = useCallback(async (imageSrc) => {
     try {
@@ -183,76 +347,56 @@ const CameraCapture = () => {
   }, [isMobile]);
 
   const captureAndUpload = useCallback(async () => {
-    if (processingRef.current) {
-      console.log("Capture in progress, skipping");
-      return;
-    }
+    if (processingRef.current) return;
     processingRef.current = true;
 
-    if (!webcamRef.current?.getScreenshot) {
-      setError("Webcam is not ready. Please try again.");
-      console.error("Webcam not ready for capture");
-      processingRef.current = false;
-      return;
-    }
-
-    let imageSrc;
     try {
-      imageSrc = webcamRef.current.getScreenshot();
-      if (!imageSrc) {
-        throw new Error("Failed to capture image from webcam.");
-      }
-    } catch (err) {
-      setError(err.message);
-      console.error("Capture error:", err);
-      processingRef.current = false;
-      return;
-    }
+      setUploading(true);
+      setError(null);
+      setResult(null);
 
-    setUploading(true);
-    setError(null);
-    setResult(null);
+      const imageSrc = webcamRef.current.getScreenshot();
+      if (!imageSrc) throw new Error("Failed to capture image from webcam.");
 
-    try {
       const blob = await compressImage(imageSrc);
       const fileName = `search/${uuidv4()}.jpg`;
 
-      await s3
-        .upload({
-          Bucket: "fjgroup-employee-authentication",
-          Key: fileName,
-          Body: blob,
-          ContentType: "image/jpeg",
-        })
-        .promise();
+      await s3.upload({
+        Bucket: "fjgroup-employee-authentication",
+        Key: fileName,
+        Body: blob,
+        ContentType: "image/jpeg",
+      }).promise();
 
-      const apiUrl =
-        "https://ylj9f75xi9.execute-api.us-east-2.amazonaws.com/dev/authenticate";
+      const apiUrl = "https://ylj9f75xi9.execute-api.us-east-2.amazonaws.com/dev/authenticate";
       const response = await axios.post(
         apiUrl,
         {
           bucket: "fjgroup-employee-authentication",
           key: fileName,
         },
-        { timeout: 10000 }
+        { timeout: 3000 }
       );
 
       setResult(response.data);
 
       if (response.data.message === "Face matched") {
-        const form = document.createElement("form");
-        form.method = "POST";
 
-        form.action="https://portal.fjtco.com:8444/fjhr/FaceLoginServlet";
-      //  form.action = "http://10.10.4.132:8080/FJPORTAL_DEV/FaceLoginServlet";
+        setTimeout(() => {
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = "https://portal.fjtco.com:8444/fjhr/FaceLoginServlet";
 
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = "employeeId";
-        input.value = response.data.employeeId;
-        form.appendChild(input);
-        document.body.appendChild(form);
-        setTimeout(() => form.submit(), 1000);
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "employeeId";
+          input.value = response.data.employeeId;
+
+          form.appendChild(input);
+          document.body.appendChild(form);
+          form.submit();
+        }, 500);
+
       }
     } catch (err) {
       const errorMsg = err.response?.data?.message || err.message;
@@ -263,158 +407,6 @@ const CameraCapture = () => {
       processingRef.current = false;
     }
   }, [compressImage]);
-
-  const detectFace = async (video) => {
-    if (!frameAnalyzerRef.current.modelsLoaded) return false;
-    
-    try {
-      const detections = await faceapi.detectAllFaces(
-        video,
-        new faceapi.TinyFaceDetectorOptions()
-      ).withFaceLandmarks();
-      
-      // Only proceed if exactly one face is detected
-      if (detections.length === 1) {
-        const landmarks = detections[0].landmarks;
-        
-        // Check if eyes are open (basic liveness check)
-        const leftEye = landmarks.getLeftEye();
-        const rightEye = landmarks.getRightEye();
-        const eyeOpenness = getEyeOpenness(leftEye, rightEye);
-        
-        // Basic threshold for eye openness
-        if (eyeOpenness > 0.2) {
-          frameAnalyzerRef.current.faceDetectionCount++;
-          
-          // Require face to be detected in multiple consecutive frames
-          if (frameAnalyzerRef.current.faceDetectionCount > 5) {
-            return true;
-          }
-        } else {
-          frameAnalyzerRef.current.faceDetectionCount = 0;
-        }
-      } else {
-        frameAnalyzerRef.current.faceDetectionCount = 0;
-      }
-    } catch (err) {
-      console.error("Face detection error:", err);
-    }
-    
-    return false;
-  };
-
-  const getEyeOpenness = (leftEye, rightEye) => {
-    // Calculate eye openness based on landmarks
-    const leftEyeHeight = Math.abs(leftEye[1].y - leftEye[5].y);
-    const rightEyeHeight = Math.abs(rightEye[1].y - rightEye[5].y);
-    return (leftEyeHeight + rightEyeHeight) / 2;
-  };
-
-  const analyzeFrame = useCallback(async () => {
-    if (
-      !webcamRef.current?.video ||
-      !canvasRef.current ||
-      processingRef.current ||
-      !webcamReady ||
-      !frameAnalyzerRef.current.modelsLoaded
-    ) {
-      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-      return;
-    }
-
-    const video = webcamRef.current.video;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      console.error("Canvas context unavailable");
-      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-      return;
-    }
-
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-      console.log("Video dimensions not ready, skipping frame analysis");
-      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-      return;
-    }
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // First check for face presence
-    const faceDetected = await detectFace(video);
-    setFaceDetected(faceDetected);
-    
-    if (!faceDetected) {
-      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-      return;
-    }
-
-    // Then proceed with blink detection
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-
-    const eyeRegion = {
-      x: canvas.width * 0.3,
-      y: canvas.height * 0.3,
-      width: canvas.width * 0.4,
-      height: canvas.height * 0.2,
-    };
-
-    let difference = 0;
-    if (frameAnalyzerRef.current.prevFrameData) {
-      const prevData = frameAnalyzerRef.current.prevFrameData;
-      for (let y = eyeRegion.y; y < eyeRegion.y + eyeRegion.height; y++) {
-        for (let x = eyeRegion.x; x < eyeRegion.x + eyeRegion.width; x++) {
-          const idx = (y * canvas.width + x) * 4;
-          const rDiff = Math.abs(data[idx] - prevData[idx]);
-          const gDiff = Math.abs(data[idx + 1] - prevData[idx + 1]);
-          const bDiff = Math.abs(data[idx + 2] - prevData[idx + 2]);
-          difference += (rDiff + gDiff + bDiff) / 3;
-        }
-      }
-      difference /= eyeRegion.width * eyeRegion.height;
-    }
-
-    frameAnalyzerRef.current.prevFrameData = new Uint8ClampedArray(data);
-
-    const now = Date.now();
-    const blinkThreshold = 30;
-    const minBlinkInterval = 1000;
-
-    if (
-      difference > blinkThreshold &&
-      now - frameAnalyzerRef.current.lastBlinkTime > minBlinkInterval
-    ) {
-      console.log("Blink detected, difference:", difference);
-      frameAnalyzerRef.current.lastBlinkTime = now;
-      setBlinkDetected(true);
-      setIsLive(true);
-      captureAndUpload();
-    }
-
-    frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-  }, [captureAndUpload, webcamReady]);
-
-  useEffect(() => {
-    if (webcamReady && !modelsLoading) {
-      frameAnalyzerRef.current = {
-        prevFrameData: null,
-        lastBlinkTime: 0,
-        animationFrame: null,
-        faceDetected: false,
-        faceDetectionCount: 0,
-        modelsLoaded: true,
-      };
-      frameAnalyzerRef.current.animationFrame = requestAnimationFrame(analyzeFrame);
-    }
-
-    return () => {
-      if (frameAnalyzerRef.current?.animationFrame) {
-        cancelAnimationFrame(frameAnalyzerRef.current.animationFrame);
-      }
-    };
-  }, [webcamReady, analyzeFrame, modelsLoading]);
 
   return (
     <Box sx={{ 
@@ -443,7 +435,7 @@ const CameraCapture = () => {
           Face Authentication
         </Typography>
 
-        {modelsLoading && (
+        {modelsLoading && !isIPhone && (
           <Box sx={{ textAlign: 'center', mb: 3 }}>
             <CircularProgress sx={{ color: '#1976d2' }} />
             <Typography sx={{ mt: 2, color: theme.palette.text.secondary }}>
@@ -453,7 +445,7 @@ const CameraCapture = () => {
         )}
 
         <WebcamContainer>
-          <Fade in={!webcamReady || modelsLoading}>
+          <Fade in={!webcamReady || (modelsLoading && !isIPhone)}>
             <Box
               sx={{
                 position: "absolute",
@@ -471,7 +463,7 @@ const CameraCapture = () => {
             >
               <CircularProgress sx={{ color: '#1976d2' }} />
               <Typography sx={{ mt: 2, color: '#fff', fontSize: isMobile ? '0.9rem' : '1rem' }}>
-                {modelsLoading ? "Loading models..." : "Initializing webcam..."}
+                {modelsLoading && !isIPhone ? "Loading models..." : "Initializing webcam..."}
               </Typography>
             </Box>
           </Fade>
@@ -505,20 +497,23 @@ const CameraCapture = () => {
               left: 0,
               width: "100%",
               height: "100%",
-              display: "none",
+              zIndex: 1,
+              display: isIPhone ? 'none' : 'block',
             }}
           />
 
-          <Fade in={webcamReady && !modelsLoading}>
+          <Fade in={webcamReady && (!modelsLoading || isIPhone)}>
             <StatusOverlay>
               <Typography variant="body2" sx={{ fontSize: isMobile ? '0.8rem' : '0.875rem' }}>
                 {uploading
                   ? "Processing authentication..."
-                  : isLive
-                    ? "Blink detected! Authenticating..."
-                    : faceDetected
-                      ? "Please blink to authenticate"
-                      : "Please position your face in the frame"}
+                  : isIPhone
+                    ? "Capturing image..."
+                    : isLive
+                      ? "Blink detected! Authenticating..."
+                      : detectionStateRef.current.faceDetected
+                        ? "Please blink to authenticate"
+                        : "Please position your face in the frame"}
               </Typography>
             </StatusOverlay>
           </Fade>

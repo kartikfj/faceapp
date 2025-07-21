@@ -443,7 +443,9 @@ const CameraCapture = () => {
       console.log("Authentication API response:", response.data);
 
       if (response.data.message === "Face matched") {
+
         console.log("Face matched, submitting form");
+
         setTimeout(() => {
           const form = document.createElement("form");
           form.method = "POST";
@@ -458,6 +460,7 @@ const CameraCapture = () => {
           document.body.appendChild(form);
           form.submit();
         }, 500);
+
       }
     } catch (err) {
       const errorMsg = err.response?.data?.message || err.message;
